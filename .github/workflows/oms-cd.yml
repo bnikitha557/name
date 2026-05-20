@@ -1,0 +1,80 @@
+# Build Docker images, push to Docker Hub, roll ECS services to new :latest.
+#
+# Repository secrets (Settings → Secrets and variables → Actions):
+#   DOCKERHUB_USERNAME  — e.g. nikithabandi
+#   DOCKERHUB_TOKEN     — Docker Hub access token (not account password)
+#   AWS_ACCESS_KEY_ID   — for ECS redeploy (optional until you wire AWS)
+#   AWS_SECRET_ACCESS_KEY
+name: OMS CD
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - "Niks_order_management_service/authservice/**"
+      - "Niks_order_management_service/ordermanagementsystem/**"
+      - ".github/workflows/**"
+  workflow_dispatch:
+
+env:
+  AWS_REGION: us-east-2
+  ECS_CLUSTER: oms-cluster
+  AUTH_IMAGE: nikithabandi/auth-service
+  ORDER_IMAGE: nikithabandi/order-service
+
+jobs:
+  docker-auth:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: Niks_order_management_service/authservice
+          push: true
+          tags: |
+            ${{ env.AUTH_IMAGE }}:latest
+            ${{ env.AUTH_IMAGE }}:${{ github.sha }}
+
+  docker-order:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: Niks_order_management_service/ordermanagementsystem
+          push: true
+          tags: |
+            ${{ env.ORDER_IMAGE }}:latest
+            ${{ env.ORDER_IMAGE }}:${{ github.sha }}
+
+  ecs-redeploy:
+    needs: [docker-auth, docker-order]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Force new ECS deployment (pull :latest)
+        run: |
+          aws ecs update-service --cluster "$ECS_CLUSTER" --service oms-auth --force-new-deployment
+          aws ecs update-service --cluster "$ECS_CLUSTER" --service oms-order --force-new-deployment
+          aws ecs wait services-stable --cluster "$ECS_CLUSTER" --services oms-auth oms-order

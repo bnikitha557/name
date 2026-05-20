@@ -1,0 +1,337 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Auth + Order microservices on ECS Fargate (ALB + Cloud Map for inter-service calls)
+
+Parameters:
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+  PublicSubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: At least two public subnets in the same VPC as RDS
+  RdsEndpoint:
+    Type: String
+    Default: database-1.cpqysuqqqw39.us-east-2.rds.amazonaws.com
+  RdsSecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
+    Description: Security group attached to your RDS instance
+  RdsMasterPassword:
+    Type: String
+    NoEcho: true
+    Description: RDS master password (same as admin user)
+  AuthImage:
+    Type: String
+    Default: nikithabandi/auth-service:latest
+  OrderImage:
+    Type: String
+    Default: nikithabandi/order-service:latest
+
+Resources:
+  Cluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: oms-cluster
+
+  LogGroupAuth:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /ecs/oms-auth
+      RetentionInDays: 7
+
+  LogGroupOrder:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /ecs/oms-order
+      RetentionInDays: 7
+
+  ExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+
+  TaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+
+  ServiceDiscoveryNamespace:
+    Type: AWS::ServiceDiscovery::PrivateDnsNamespace
+    Properties:
+      Name: oms.local
+      Vpc: !Ref VpcId
+
+  AuthDiscoveryService:
+    Type: AWS::ServiceDiscovery::Service
+    Properties:
+      Name: auth-service
+      NamespaceId: !Ref ServiceDiscoveryNamespace
+      DnsConfig:
+        RoutingPolicy: MULTIVALUE
+        DnsRecords:
+          - Type: A
+            TTL: 10
+
+  AlbSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: ALB for OMS
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+
+  EcsSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: ECS tasks for OMS
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 8081
+          ToPort: 8081
+          SourceSecurityGroupId: !Ref AlbSecurityGroup
+        - IpProtocol: tcp
+          FromPort: 8082
+          ToPort: 8082
+          SourceSecurityGroupId: !Ref AlbSecurityGroup
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+
+  RdsIngressFromEcs:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref RdsSecurityGroupId
+      IpProtocol: tcp
+      FromPort: 3306
+      ToPort: 3306
+      SourceSecurityGroupId: !Ref EcsSecurityGroup
+
+  Alb:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: oms-alb
+      Scheme: internet-facing
+      Type: application
+      Subnets: !Ref PublicSubnetIds
+      SecurityGroups:
+        - !Ref AlbSecurityGroup
+
+  AuthTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: oms-auth-tg
+      Port: 8081
+      Protocol: HTTP
+      VpcId: !Ref VpcId
+      TargetType: ip
+      HealthCheckProtocol: HTTP
+      HealthCheckPath: /auth/health
+      HealthCheckPort: "8081"
+      Matcher:
+        HttpCode: "200"
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 5
+      HealthCheckIntervalSeconds: 30
+
+  OrderTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: oms-order-tg
+      Port: 8082
+      Protocol: HTTP
+      VpcId: !Ref VpcId
+      TargetType: ip
+      HealthCheckProtocol: HTTP
+      HealthCheckPath: /orders
+      HealthCheckPort: "8082"
+      Matcher:
+        HttpCode: 200-499
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 5
+      HealthCheckIntervalSeconds: 30
+
+  HttpListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref Alb
+      Port: 80
+      Protocol: HTTP
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref OrderTargetGroup
+
+  AuthListenerRule:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Properties:
+      ListenerArn: !Ref HttpListener
+      Priority: 10
+      Conditions:
+        - Field: path-pattern
+          Values:
+            - /auth*
+            - /test
+      Actions:
+        - Type: forward
+          TargetGroupArn: !Ref AuthTargetGroup
+
+  OrderListenerRule:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Properties:
+      ListenerArn: !Ref HttpListener
+      Priority: 20
+      Conditions:
+        - Field: path-pattern
+          Values:
+            - /orders*
+      Actions:
+        - Type: forward
+          TargetGroupArn: !Ref OrderTargetGroup
+
+  AuthTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: oms-auth
+      Cpu: "512"
+      Memory: "1024"
+      NetworkMode: awsvpc
+      RequiresCompatibilities:
+        - FARGATE
+      ExecutionRoleArn: !GetAtt ExecutionRole.Arn
+      TaskRoleArn: !GetAtt TaskRole.Arn
+      ContainerDefinitions:
+        - Name: auth-service
+          Image: !Ref AuthImage
+          Essential: true
+          PortMappings:
+            - ContainerPort: 8081
+              Protocol: tcp
+          Environment:
+            - Name: SPRING_PROFILES_ACTIVE
+              Value: ecs
+            - Name: RDS_HOST
+              Value: !Ref RdsEndpoint
+            - Name: RDS_USERNAME
+              Value: admin
+            - Name: RDS_PASSWORD
+              Value: !Ref RdsMasterPassword
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref LogGroupAuth
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: auth
+
+  OrderTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: oms-order
+      Cpu: "512"
+      Memory: "1024"
+      NetworkMode: awsvpc
+      RequiresCompatibilities:
+        - FARGATE
+      ExecutionRoleArn: !GetAtt ExecutionRole.Arn
+      TaskRoleArn: !GetAtt TaskRole.Arn
+      ContainerDefinitions:
+        - Name: order-service
+          Image: !Ref OrderImage
+          Essential: true
+          PortMappings:
+            - ContainerPort: 8082
+              Protocol: tcp
+          Environment:
+            - Name: SPRING_PROFILES_ACTIVE
+              Value: ecs
+            - Name: RDS_HOST
+              Value: !Ref RdsEndpoint
+            - Name: RDS_USERNAME
+              Value: admin
+            - Name: RDS_PASSWORD
+              Value: !Ref RdsMasterPassword
+            - Name: AUTH_SERVICE_URL
+              Value: http://auth-service.oms.local:8081
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref LogGroupOrder
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: order
+
+  AuthService:
+    Type: AWS::ECS::Service
+    DependsOn:
+      - HttpListener
+      - AuthListenerRule
+    Properties:
+      ServiceName: oms-auth
+      Cluster: !Ref Cluster
+      TaskDefinition: !Ref AuthTaskDefinition
+      DesiredCount: 1
+      LaunchType: FARGATE
+      HealthCheckGracePeriodSeconds: 120
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: ENABLED
+          Subnets: !Ref PublicSubnetIds
+          SecurityGroups:
+            - !Ref EcsSecurityGroup
+      ServiceRegistries:
+        - RegistryArn: !GetAtt AuthDiscoveryService.Arn
+      LoadBalancers:
+        - ContainerName: auth-service
+          ContainerPort: 8081
+          TargetGroupArn: !Ref AuthTargetGroup
+
+  OrderService:
+    Type: AWS::ECS::Service
+    DependsOn:
+      - HttpListener
+      - OrderListenerRule
+      - AuthService
+    Properties:
+      ServiceName: oms-order
+      Cluster: !Ref Cluster
+      TaskDefinition: !Ref OrderTaskDefinition
+      DesiredCount: 1
+      LaunchType: FARGATE
+      HealthCheckGracePeriodSeconds: 120
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: ENABLED
+          Subnets: !Ref PublicSubnetIds
+          SecurityGroups:
+            - !Ref EcsSecurityGroup
+      LoadBalancers:
+        - ContainerName: order-service
+          ContainerPort: 8082
+          TargetGroupArn: !Ref OrderTargetGroup
+
+Outputs:
+  ClusterName:
+    Value: !Ref Cluster
+  AlbDnsName:
+    Description: Use this base URL in Postman
+    Value: !GetAtt Alb.DNSName
+  AuthValidateUrl:
+    Value: !Sub "http://${Alb.DNSName}/auth/validate"
+  OrdersUrl:
+    Value: !Sub "http://${Alb.DNSName}/orders"
+  EcsSecurityGroupId:
+    Value: !Ref EcsSecurityGroup
+  AuthServiceDiscovery:
+    Value: auth-service.oms.local
