@@ -1,0 +1,2 @@
+# Optional override (profile aws,aws-local). Prefer project-root aws-db.properties instead.
+# spring.datasource.password=YOUR_RDS_PASSWORD

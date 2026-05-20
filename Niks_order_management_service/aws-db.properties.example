@@ -1,0 +1,6 @@
+# Copy to aws-db.properties in this folder (same level as authservice/) and set your RDS password.
+# File is gitignored — never commit the real password.
+#
+#   cp aws-db.properties.example aws-db.properties
+#
+rds.password=YOUR_RDS_MASTER_PASSWORD_HERE
