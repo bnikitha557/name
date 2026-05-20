@@ -9,7 +9,7 @@ on:
       - "Niks_order_management_service/ordermanagementsystem/**"
       - ".github/workflows/**"
   push:
-    branches: [main, master]
+    branches: [main, master, feature/hmi-123main]
     paths:
       - "Niks_order_management_service/authservice/**"
       - "Niks_order_management_service/ordermanagementsystem/**"

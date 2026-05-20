@@ -17,15 +17,41 @@ Workflows live in the repo root `.github/workflows/`:
 
 | Workflow | Trigger | What it does |
 |----------|---------|--------------|
-| `oms-ci.yml` | PR / push to `main` | Maven tests (Java 17, in-memory H2) |
-| `oms-cd.yml` | Push to `main` / manual | Build & push Docker images; redeploy ECS |
+| `oms-ci.yml` | PR / push to `feature/hmi-123main` or `main` | Maven tests (Java 17, in-memory H2) |
+| `oms-cd.yml` | Push to `feature/hmi-123main` or `main` / manual | Build & push Docker images; redeploy ECS |
 
-**Action secrets** (repo → Settings → Secrets and variables → Actions):
+### Enable automatic deploy (one-time)
 
-- `DOCKERHUB_USERNAME` / `DOCKERHUB_TOKEN` — required for image push
-- `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` — required for ECS `force-new-deployment` (IAM needs `ecs:UpdateService`, `ecs:DescribeServices`)
+1. Open **GitHub → bnikitha557/name → Settings → Secrets and variables → Actions → New repository secret** and add:
 
-Images: `nikithabandi/auth-service:latest`, `nikithabandi/order-service:latest` (same as CloudFormation defaults).
+| Secret | Value |
+|--------|--------|
+| `DOCKERHUB_USERNAME` | `nikithabandi` (your Docker Hub user) |
+| `DOCKERHUB_TOKEN` | Docker Hub → Account Settings → **Security** → New Access Token (read/write) |
+| `AWS_ACCESS_KEY_ID` | IAM user access key |
+| `AWS_SECRET_ACCESS_KEY` | IAM user secret key |
+
+2. IAM user policy (minimum) for the ECS redeploy step:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "ecs:UpdateService",
+        "ecs:DescribeServices"
+      ],
+      "Resource": "*"
+    }
+  ]
+}
+```
+
+3. Push to `feature/hmi-123main` (or run **Actions → OMS CD → Run workflow** manually).
+
+Images pushed: `nikithabandi/auth-service:latest`, `nikithabandi/order-service:latest` (same as CloudFormation defaults). ECS cluster `oms-cluster`, services `oms-auth` and `oms-order` in `us-east-2`.
 
 ## Prerequisites
 
