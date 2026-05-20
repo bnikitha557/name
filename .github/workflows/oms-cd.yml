@@ -38,6 +38,7 @@ jobs:
       - uses: docker/build-push-action@v6
         with:
           context: Niks_order_management_service/authservice
+          platforms: linux/amd64
           push: true
           tags: |
             ${{ env.AUTH_IMAGE }}:latest
@@ -58,6 +59,7 @@ jobs:
       - uses: docker/build-push-action@v6
         with:
           context: Niks_order_management_service/ordermanagementsystem
+          platforms: linux/amd64
           push: true
           tags: |
             ${{ env.ORDER_IMAGE }}:latest
