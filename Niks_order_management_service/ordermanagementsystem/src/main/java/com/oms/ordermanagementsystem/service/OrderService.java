@@ -40,6 +40,20 @@ public class OrderService {
                 .orElseThrow(() -> new RuntimeException("Order not found"));
     }
 
+    public Order updateOrder(Long id, Order order, String token) {
+        Boolean isValid = authClient.validate(token);
+        if (!Boolean.TRUE.equals(isValid)) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Unauthorized user");
+        }
+        Order existing = orderRepository.findById(id)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Order not found"));
+        existing.setProductName(order.getProductName());
+        existing.setQuantity(order.getQuantity());
+        existing.setPrice(order.getPrice());
+        logger.info("Updating order {}: {}", id, existing);
+        return orderRepository.save(existing);
+    }
+
     public void deleteOrder(Long id) {
         orderRepository.deleteById(id);
     }

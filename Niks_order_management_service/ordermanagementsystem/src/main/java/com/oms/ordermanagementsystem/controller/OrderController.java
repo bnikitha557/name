@@ -33,6 +33,14 @@ public class OrderController {
         return orderService.getOrderById(id);
     }
 
+    @PutMapping("/{id}")
+    public Order updateOrder(
+            @PathVariable Long id,
+            @Valid @RequestBody Order order,
+            @RequestHeader("Authorization") String token) {
+        return orderService.updateOrder(id, order, token);
+    }
+
     @DeleteMapping("/{id}")
     public String deleteOrder(@PathVariable Long id) {
         orderService.deleteOrder(id);

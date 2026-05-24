@@ -108,6 +108,11 @@ Resources:
           FromPort: 8082
           ToPort: 8082
           SourceSecurityGroupId: !Ref AlbSecurityGroup
+        # Order service calls auth via Cloud Map (auth-service.oms.local:8081)
+        - IpProtocol: tcp
+          FromPort: 8081
+          ToPort: 8081
+          SourceSecurityGroupId: !Ref EcsSecurityGroup
       SecurityGroupEgress:
         - IpProtocol: -1
           CidrIp: 0.0.0.0/0
@@ -264,7 +269,7 @@ Resources:
             - Name: RDS_PASSWORD
               Value: !Ref RdsMasterPassword
             - Name: AUTH_SERVICE_URL
-              Value: http://auth-service.oms.local:8081
+              Value: !Sub "http://${Alb.DNSName}"
           LogConfiguration:
             LogDriver: awslogs
             Options:
